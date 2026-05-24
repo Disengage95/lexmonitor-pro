@@ -79,7 +79,7 @@ def consultar_rama_judicial(radicado):
     url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "es-ES,es;q=0.9",
         "Origin": "https://consultaprocesos.ramajudicial.gov.co",
@@ -87,22 +87,27 @@ def consultar_rama_judicial(radicado):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=12)
         
         if response.status_code == 200:
-            datos = response.json()
-            if "procesos" in datos and len(datos["procesos"]) > 0:
-                ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                return ultima_actuacion
-            else:
-                return "Proceso no encontrado en la Rama Judicial (Verifica el radicado)"
+            try:
+                datos = response.json()
+                if "procesos" in datos and len(datos["procesos"]) > 0:
+                    ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                    return ultima_actuacion
+                else:
+                    return "No encontrado en Rama Judicial"
+            except ValueError:
+                return "Respuesta inválida del servidor oficial"
+        elif response.status_code == 403 or response.status_code == 406:
+            return "Acceso restringido por firewall de la Rama Judicial"
         else:
-            return f"Error de conexión con la Rama Judicial (Código: {response.status_code})"
+            return f"Servidor fuera de servicio (Código: {response.status_code})"
             
     except requests.exceptions.Timeout:
-        return "El servidor de la Rama Judicial tardó demasiado en responder (Timeout)"
-    except Exception as e:
-        return f"Error inesperado al consultar el juzgado: {str(e)}"
+        return "Servidor de la Rama Judicial lento (Timeout)"
+    except Exception:
+        return "Error temporal de conexión"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -234,9 +239,11 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
-                        enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
-                        alertas_disparadas += 1
+                    # Evitamos disparar alertas si la API devuelve un mensaje de error técnico temporal
+                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual:
+                        if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
+                            enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
+                            alertas_disparadas += 1
                     
                     cursor.execute('''
                         UPDATE radicados 
