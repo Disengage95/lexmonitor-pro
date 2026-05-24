@@ -77,22 +77,37 @@ def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def consultar_rama_judicial(radicado):
+    # Endpoint oficial de la Rama Judicial para consulta por número de radicación de 23 dígitos
     url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "es-ES,es;q=0.9",
+        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
         "Connection": "keep-alive"
     }
+    
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        # Petición a la API de la Rama Judicial
+        response = requests.get(url, headers=headers, timeout=15)
+        
         if response.status_code == 200:
             datos = response.json()
+            # Validamos que la API devuelva procesos válidos
             if "procesos" in datos and len(datos["procesos"]) > 0:
-                return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-        return "Auto requiere cumplimiento (Simulado - Modo Prueba)"
-    except Exception:
-        return "Fijación en lista (Simulado - Modo Prueba)"
+                # Extraemos la última actuación real registrada en el juzgado
+                ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                return ultima_actuacion
+            else:
+                return "Proceso no encontrado en la Rama Judicial (Verifica el radicado)"
+        else:
+            return f"Error de conexión con la Rama Judicial (Código: {response.status_code})"
+            
+    except requests.exceptions.Timeout:
+        return "El servidor de la Rama Judicial tardó demasiado en responder (Timeout)"
+    except Exception as e:
+        return f"Error inesperado al consultar el juzgado: {str(e)}"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
