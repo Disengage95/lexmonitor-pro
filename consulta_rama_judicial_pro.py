@@ -11,10 +11,11 @@ from datetime import datetime
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
 # CONFIGURACIÓN DE CORREO SALIENTE (Para las Alertas SaaS)
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-EMAIL_EMISOR = "tu_correo_sistema@gmail.com"
-EMAIL_PASSWORD = "tu_contraseña_aplicacion"
+# CONFIGURACIÓN DE CORREO SALIENTE (Conectado a los Secrets de Streamlit)
+SMTP_SERVER = st.secrets["correo"]["smtp_server"]
+SMTP_PORT = st.secrets["correo"]["smtp_port"]
+EMAIL_EMISOR = st.secrets["correo"]["email_emisor"]
+EMAIL_PASSWORD = st.secrets["correo"]["email_password"]
 
 def enviar_alerta_correo(correo_destino, radicado, nombre_caso, nueva_actuacion):
     asunto = f"⚖️ ALERTA: Novedad en el proceso - {nombre_caso}"
