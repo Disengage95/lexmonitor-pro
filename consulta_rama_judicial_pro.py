@@ -4,7 +4,7 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-from streamlit_js_eval import streamlit_js_eval
+import requests
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -90,8 +90,6 @@ if "logeado" not in st.session_state:
     st.session_state["logeado"] = False
     st.session_state["usuario_id"] = None
     st.session_state["usuario_correo"] = ""
-if "proceso_a_revisar" not in st.session_state:
-    st.session_state["proceso_a_revisar"] = None
 
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
@@ -206,44 +204,7 @@ else:
     procesos_usuario = cursor.fetchall()
     conn.close()
 
-    # INTERCEPTOR DE DATOS REALES CON EVALUADOR JS
-    if st.session_state["proceso_a_revisar"]:
-        pid_r, rad_r, nombre_r, anterior_r = st.session_state["proceso_a_revisar"]
-        
-        script_js = f"""
-            await fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad_r}")
-            .then(res => res.json())
-            .then(data => {{
-                if(data.procesos && data.procesos.length > 0) {{
-                    return data.procesos[0].ultimaActuacion || "Sin actuaciones recientes";
-                }} else {{
-                    return "No encontrado en la Rama Judicial";
-                }}
-            }})
-            .catch(err => "Error temporal de red o formato");
-        """
-        
-        with st.spinner("Trayendo datos desde la Rama Judicial..."):
-            actuacion_real = streamlit_js_eval(js_expressions=script_js, key=f"eval_{rad_r}")
-            
-        if actuacion_real:
-            actuacion_real = str(actuacion_real).strip()
-            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-            
-            conn = conectar_db()
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
-            ''', (actuacion_real, fecha_actual, pid_r))
-            conn.commit()
-            conn.close()
-            
-            if actuacion_real != anterior_r and anterior_r != "Pendiente de revisión" and "Error" not in actuacion_real:
-                enviar_alerta_correo(st.session_state["usuario_correo"], rad_r, nombre_r, actuacion_real)
-                
-            st.session_state["proceso_a_revisar"] = None
-            st.rerun()
-
+    # MOSTRAR LISTADO DE TARJETAS
     if procesos_usuario:
         for pid, rad, nombre, actuacion, revision in procesos_usuario:
             with st.container(border=True):
@@ -266,10 +227,56 @@ else:
                         st.rerun()
                         
         st.markdown("---")
+        
+        # CONSULTA DIRECTA DESDE PYTHON CON CAMUFLAJE DE NAVEGADOR (HEADERS REALES)
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
-                st.session_state["proceso_a_revisar"] = (pid, rad, nombre, actuacion_anterior)
-                break
-            st.rerun()
+            with st.spinner("Consultando servidores judiciales desde tu IP local..."):
+                
+                # Definimos cabeceras idénticas a las de un navegador web para pasar desapercibidos
+                headers_navegador = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "es-ES,es;q=0.9",
+                    "Origin": "https://consultaprocesos.ramajudicial.gov.co",
+                    "Referer": "https://consultaprocesos.ramajudicial.gov.co/"
+                }
+                
+                conn = conectar_db()
+                cursor = conn.cursor()
+                
+                for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
+                    url_api = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad}"
+                    
+                    try:
+                        respuesta = requests.get(url_api, headers=headers_navegador, timeout=12)
+                        
+                        if respuesta.status_code == 200:
+                            datos = respuesta.json()
+                            if datos.get("procesos") and len(datos["procesos"]) > 0:
+                                actuacion_real = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                            else:
+                                actuacion_real = "No encontrado en la Rama Judicial"
+                        else:
+                            actuacion_real = f"Restricción temporal del servidor (Código {respuesta.status_code})"
+                            
+                    except requests.exceptions.Timeout:
+                        actuacion_real = "Tiempo de espera agotado (Servidor lento)"
+                    except Exception as e:
+                        actuacion_real = "Error de conexión local"
+                    
+                    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    
+                    # Actualizar fila en la Base de Datos
+                    cursor.execute('''
+                        UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
+                    ''', (actuacion_real, fecha_actual, pid))
+                    
+                    # Si la actuación cambió, intentará mandar correo (si está configurado)
+                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Restricción" not in actuacion_real:
+                        enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
+                
+                conn.commit()
+                conn.close()
+                st.rerun()
     else:
         st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
