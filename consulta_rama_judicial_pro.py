@@ -78,7 +78,6 @@ def encriptar_password(password):
 def consultar_rama_judicial(radicado):
     url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
-    # Cabeceras emulando un navegador real para evadir bloqueos básicos de Streamlit Cloud
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -93,7 +92,6 @@ def consultar_rama_judicial(radicado):
     }
     
     try:
-        # Usamos una sesión para mantener cookies activas durante la consulta
         session = requests.Session()
         response = session.get(url, headers=headers, timeout=15)
         
@@ -113,7 +111,7 @@ def consultar_rama_judicial(radicado):
             return f"Servidor inestable (Código: {response.status_code})"
             
     except requests.exceptions.Timeout:
-        return "Conación lenta con el juzgado (Timeout)"
+        return "Conexión lenta con el juzgado (Timeout)"
     except Exception:
         return "Error de conexión temporal"
 
@@ -235,10 +233,10 @@ else:
     conn.close()
 
     if procesos_usuario:
-        # Renderizar cada proceso en tarjetas visuales independientes
+        # Renderizar cada proceso en tarjetas visuales independientes con botón de eliminación integrado
         for pid, rad, nombre, actuacion, revision in procesos_usuario:
             with st.container(border=True):
-                col_info, col_boton = st.columns([5, 1.2])
+                col_info, col_boton = st.columns([5, 1.5])
                 
                 with col_info:
                     st.markdown(f"**⚖️ Radicado:** `{rad}`")
@@ -247,7 +245,7 @@ else:
                     st.markdown(f"**🕒 Última Revisión:** {revision}")
                 
                 with col_boton:
-                    st.write("")  # Alineación visual
+                    st.write("")  # Espacio para alinear el botón verticalmente
                     if st.button("🗑️ Eliminar Proceso", key=f"del_{pid}", type="primary", use_container_width=True):
                         conn = conectar_db()
                         cursor = conn.cursor()
@@ -263,11 +261,11 @@ else:
                 cursor = conn.cursor()
                 
                 alertas_disparadas = 0
-                for pid, rad, nombre, actuacion_anterior in procesos_usuario:
+                for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Filtramos errores para no sobreescribir estados reales previos si el servidor se cae
+                    # Evitamos sobreescribir el historial con fallas o bloqueos de red directos
                     if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual and "temporal" not in actuacion_actual and "Bloqueo" not in actuacion_actual:
                         if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                             enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
@@ -281,11 +279,6 @@ else:
                 
                 conn.commit()
                 conn.close()
-                
-                if alertas_disparadas > 0:
-                    st.success(f"ℹ️ Revisión terminada. Se detectaron {alertas_disparadas} cambios y se enviaron las alertas.")
-                else:
-                    st.success("ℹ️ Sus procesos se han actualizado.")
                 st.rerun()
     else:
         st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
