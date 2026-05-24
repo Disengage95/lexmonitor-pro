@@ -4,13 +4,12 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-import streamlit.components.v1 as components
-import json
+from streamlit_js_eval import streamlit_js_eval
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
-# CONTROL ROBUSTO DE SECRETOS (Si falla localmente, usa variables vacías para no bloquear la app)
+# CONTROL ROBUSTO DE SECRETOS
 try:
     SMTP_SERVER = st.secrets["correo"]["smtp_server"]
     SMTP_PORT = st.secrets["correo"]["smtp_port"]
@@ -26,7 +25,7 @@ except Exception:
 
 def enviar_alerta_correo(correo_destino, radicado, nombre_caso, nueva_actuacion):
     if not CORREO_CONFIGURADO:
-        return False # Ignora el envío si está corriendo local sin secrets
+        return False
         
     asunto = f"⚖️ ALERTA: Novedad en el proceso - {nombre_caso}"
     cuerpo_mensaje = f"""
@@ -97,7 +96,7 @@ if "proceso_a_revisar" not in st.session_state:
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
 if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: El sistema de alertas por correo está pausado, pero puedes consultar la Rama Judicial.")
+    st.warning("⚠️ Modo Local Activo: Consultando directamente desde tu IP residencial.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -207,32 +206,28 @@ else:
     procesos_usuario = cursor.fetchall()
     conn.close()
 
-    # TÚNEL INVISIBLE JAVASCRIPT LOCAL
+    # INTERCEPTOR DE DATOS REALES CON EVALUADOR JS
     if st.session_state["proceso_a_revisar"]:
         pid_r, rad_r, nombre_r, anterior_r = st.session_state["proceso_a_revisar"]
         
-        js_base = """
-        <script>
-            fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/NUMERO_RADICADO_AQUI")
-            .then(response => response.json())
-            .then(data => {
-                if(data.procesos && data.procesos.length > 0) {
-                    let actuacion = data.procesos[0].ultimaActuacion || "Sin actuaciones recientes";
-                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: actuacion}, '*');
-                } else {
-                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: 'No encontrado en Rama Judicial'}, '*');
-                }
-            })
-            .catch(error => {
-                window.parent.postMessage({type: 'streamlit:setComponentValue', value: 'Reintente consulta local'}, '*');
-            });
-        </script>
+        script_js = f"""
+            await fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad_r}")
+            .then(res => res.json())
+            .then(data => {{
+                if(data.procesos && data.procesos.length > 0) {{
+                    return data.procesos[0].ultimaActuacion || "Sin actuaciones recientes";
+                }} else {{
+                    return "No encontrado en la Rama Judicial";
+                }}
+            }})
+            .catch(err => "Error temporal de red o formato");
         """
-        js_injector = js_base.replace("NUMERO_RADICADO_AQUI", str(rad_r))
-        respuesta_navegador = components.html(js_injector, height=0, width=0)
         
-        if respuesta_navegador:
-            actuacion_real = str(respuesta_navegador)
+        with st.spinner("Trayendo datos desde la Rama Judicial..."):
+            actuacion_real = streamlit_js_eval(js_expressions=script_js, key=f"eval_{rad_r}")
+            
+        if actuacion_real:
+            actuacion_real = str(actuacion_real).strip()
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
             
             conn = conectar_db()
@@ -243,7 +238,7 @@ else:
             conn.commit()
             conn.close()
             
-            if actuacion_real != anterior_r and anterior_r != "Pendiente de revisión" and "Reintente" not in actuacion_real:
+            if actuacion_real != anterior_r and anterior_r != "Pendiente de revisión" and "Error" not in actuacion_real:
                 enviar_alerta_correo(st.session_state["usuario_correo"], rad_r, nombre_r, actuacion_real)
                 
             st.session_state["proceso_a_revisar"] = None
