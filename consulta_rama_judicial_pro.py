@@ -10,13 +10,24 @@ import json
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
-# CONFIGURACIÓN DE CORREO SALIENTE
-SMTP_SERVER = st.secrets["correo"]["smtp_server"]
-SMTP_PORT = st.secrets["correo"]["smtp_port"]
-EMAIL_EMISOR = st.secrets["correo"]["email_emisor"]
-EMAIL_PASSWORD = st.secrets["correo"]["email_password"]
+# CONTROL ROBUSTO DE SECRETOS (Si falla localmente, usa variables vacías para no bloquear la app)
+try:
+    SMTP_SERVER = st.secrets["correo"]["smtp_server"]
+    SMTP_PORT = st.secrets["correo"]["smtp_port"]
+    EMAIL_EMISOR = st.secrets["correo"]["email_emisor"]
+    EMAIL_PASSWORD = st.secrets["correo"]["email_password"]
+    CORREO_CONFIGURADO = True
+except Exception:
+    SMTP_SERVER = ""
+    SMTP_PORT = 587
+    EMAIL_EMISOR = ""
+    EMAIL_PASSWORD = ""
+    CORREO_CONFIGURADO = False
 
 def enviar_alerta_correo(correo_destino, radicado, nombre_caso, nueva_actuacion):
+    if not CORREO_CONFIGURADO:
+        return False # Ignora el envío si está corriendo local sin secrets
+        
     asunto = f"⚖️ ALERTA: Novedad en el proceso - {nombre_caso}"
     cuerpo_mensaje = f"""
     Estimado(a) Doctor(a),
@@ -85,6 +96,8 @@ if "proceso_a_revisar" not in st.session_state:
 
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
+if not CORREO_CONFIGURADO:
+    st.warning("⚠️ Modo Local Activo: El sistema de alertas por correo está pausado, pero puedes consultar la Rama Judicial.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -194,7 +207,7 @@ else:
     procesos_usuario = cursor.fetchall()
     conn.close()
 
-    # TÚNEL INVISIBLE CORREGIDO SIN F-STRING
+    # TÚNEL INVISIBLE JAVASCRIPT LOCAL
     if st.session_state["proceso_a_revisar"]:
         pid_r, rad_r, nombre_r, anterior_r = st.session_state["proceso_a_revisar"]
         
