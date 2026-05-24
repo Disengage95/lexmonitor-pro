@@ -211,9 +211,6 @@ else:
         st.dataframe(df, use_container_width=True)
         
         if st.button("🔄 Ejecutar Revisión Diaria de Términos"):
-            # LÍNEA TEMPORAL DE PRUEBA DE CORREO (Con tu correo real de destino)
-             enviar_alerta_correo("escamilladuvandavid@gmail.com", "12345678901234567890123", "Proceso de Prueba Exitoso", "Esta es una actuación ficticia para verificar las alertas en la nube.")
-             st.success("¡Correo de prueba forzado enviado!")
             with st.spinner("Revisando estados de sus radicados..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
@@ -225,9 +222,10 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
-                        enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
-                        alertas_disparadas += 1
+                    if True:  # CAMBIO TEMPORAL: Forzar envío en modo prueba
+                    #if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
+                     #   enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
+                      #  alertas_disparadas += 1
                     
                     cursor.execute('''
                         UPDATE radicados 
