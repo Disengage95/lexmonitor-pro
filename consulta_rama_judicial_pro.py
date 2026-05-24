@@ -217,7 +217,7 @@ else:
     st.header("📋 Tus Procesos Activos")
     conn = conectar_db()
     df = pd.read_sql_query('''
-        SELECT numero_radicado as 'Radicado', nombre_caso as 'Caso / Cliente', 
+        SELECT id, numero_radicado as 'Radicado', nombre_caso as 'Caso / Cliente', 
                ultima_actuacion as 'Última Actuación', fecha_ultima_revision as 'Última Revisión' 
         FROM radicados 
         WHERE usuario_id = ?
@@ -225,8 +225,30 @@ else:
     conn.close()
 
     if not df.empty:
-        st.dataframe(df, use_container_width=True)
+        # Habilitamos st.data_editor ocultando la columna 'id' pero usándola para borrar filas seleccionadas
+        tabla_editable = st.data_editor(
+            df,
+            column_config={"id": None},  # Oculta la columna de ID interno
+            disabled=["Radicado", "Caso / Cliente", "Última Actuación", "Última Revisión"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key="editor_procesos"
+        )
         
+        # Verificar si el usuario eliminó filas en la interfaz de Streamlit
+        if st.session_state["editor_procesos"]["deleted_rows"]:
+            indices_a_borrar = st.session_state["editor_procesos"]["deleted_rows"]
+            conn = conectar_db()
+            cursor = conn.cursor()
+            for idx in indices_a_borrar:
+                id_base_datos = int(df.iloc[idx]['id'])
+                cursor.execute("DELETE FROM radicados WHERE id = ?", (id_base_datos,))
+            conn.commit()
+            conn.close()
+            st.success("🗑️ Radicado(s) eliminado(s) correctamente.")
+            st.rerun()
+            
+        st.markdown("---")
         if st.button("🔄 Ejecutar Revisión Diaria de Términos"):
             with st.spinner("Revisando estados de sus radicados..."):
                 conn = conectar_db()
@@ -239,25 +261,4 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Evitamos disparar alertas si la API devuelve un mensaje de error técnico temporal
-                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual:
-                        if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
-                            enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
-                            alertas_disparadas += 1
-                    
-                    cursor.execute('''
-                        UPDATE radicados 
-                        SET ultima_actuacion = ?, fecha_ultima_revision = ?
-                        WHERE id = ?
-                    ''', (actuacion_actual, fecha_actual, pid))
-                
-                conn.commit()
-                conn.close()
-                
-                if alertas_disparadas > 0:
-                    st.success(f"ℹ️ Revisión terminada. Se detectaron {alertas_disparadas} cambios y se enviaron las alertas.")
-                else:
-                    st.success("ℹ️ Sus procesos se han actualizado. No se detectaron cambios nuevos.")
-                st.rerun()
-    else:
-        st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
+                    if "Error" not in actuacion_actual and "re
