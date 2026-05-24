@@ -10,7 +10,6 @@ from datetime import datetime
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
-# CONFIGURACIÓN DE CORREO SALIENTE (Para las Alertas SaaS)
 # CONFIGURACIÓN DE CORREO SALIENTE (Conectado a los Secrets de Streamlit)
 SMTP_SERVER = st.secrets["correo"]["smtp_server"]
 SMTP_PORT = st.secrets["correo"]["smtp_port"]
@@ -77,7 +76,6 @@ def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def consultar_rama_judicial(radicado):
-    # Endpoint oficial de la Rama Judicial para consulta por número de radicación de 23 dígitos
     url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
     headers = {
@@ -89,14 +87,11 @@ def consultar_rama_judicial(radicado):
     }
     
     try:
-        # Petición a la API de la Rama Judicial
         response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
             datos = response.json()
-            # Validamos que la API devuelva procesos válidos
             if "procesos" in datos and len(datos["procesos"]) > 0:
-                # Extraemos la última actuación real registrada en el juzgado
                 ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
                 return ultima_actuacion
             else:
@@ -152,7 +147,6 @@ if not st.session_state["logeado"]:
 
     with col2:
         st.subheader("📝 Registrarse como Cliente")
-        # clear_on_submit limpia las cajas de texto de este formulario en cuanto se procesa el clic
         with st.form("form_registro", clear_on_submit=True):
             reg_correo = st.text_input("Correo Electrónico")
             reg_pass = st.text_input("Contraseña", type="password")
@@ -184,16 +178,19 @@ else:
         st.rerun()
         
     st.sidebar.markdown("---")
-    
     st.sidebar.header("📥 Registrar Nuevo Proceso")
     
-    # CORRECCIÓN AQUÍ: Usamos st.sidebar de contenedor y creamos el formulario de forma correcta
     with st.sidebar.form("form_nuevo_proceso", clear_on_submit=True):
-        nuevo_radicado = st.text_input("Número de Radicado (23 dígitos)", max_chars=23)
+        nuevo_radicado = st.text_input("Número de Radicado (21 o 23 dígitos)", max_chars=23)
         nombre_caso = st.text_input("Nombre del Caso / Cliente")
         boton_agregar = st.form_submit_button("Agregar a Monitoreo")
 
         if boton_agregar:
+            nuevo_radicado = nuevo_radicado.strip()
+            
+            if len(nuevo_radicado) == 21 and nuevo_radicado.isdigit():
+                nuevo_radicado = nuevo_radicado + "00"
+                
             if len(nuevo_radicado) == 23 and nuevo_radicado.isdigit():
                 conn = conectar_db()
                 cursor = conn.cursor()
@@ -203,14 +200,14 @@ else:
                         VALUES (?, ?, ?, ?, ?)
                     ''', (st.session_state["usuario_id"], nuevo_radicado, nombre_caso, "Pendiente de revisión", "Nunca"))
                     conn.commit()
-                    st.success("✅ Radicado guardado.")
+                    st.success(f"✅ Radicado guardado exitosamente.")
                 except sqlite3.IntegrityError:
                     st.warning("⚠️ Ya está monitoreando este radicado.")
                 finally:
                     conn.close()
                 st.rerun()
             else:
-                st.error("❌ Deben ser 23 dígitos numéricos.")
+                st.error("❌ El radicado debe tener 21 o 23 dígitos numéricos.")
 
     st.header("📋 Tus Procesos Activos")
     conn = conectar_db()
@@ -237,7 +234,6 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Validación real comercial: Solo envía si hay cambios y no es un radicado nuevo
                     if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
                         alertas_disparadas += 1
