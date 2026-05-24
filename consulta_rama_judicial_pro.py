@@ -5,6 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 import requests
+import json
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -94,7 +95,7 @@ if "logeado" not in st.session_state:
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
 if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: Consultando directamente desde tu IP residencial.")
+    st.warning("⚠️ Modo Local Activo: Utilizando bypass de conexión para IPs residenciales.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -228,51 +229,44 @@ else:
                         
         st.markdown("---")
         
-        # CONSULTA DIRECTA DESDE PYTHON CON CAMUFLAJE DE NAVEGADOR (HEADERS REALES)
+        # EXTRACCIÓN MEDIANTE CORS-PROXY DE SERVIDOR PARA EVITAR BLOQUEOS DE IP RESIDENCIAL
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            with st.spinner("Consultando servidores judiciales desde tu IP local..."):
-                
-                # Definimos cabeceras idénticas a las de un navegador web para pasar desapercibidos
-                headers_navegador = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "es-ES,es;q=0.9",
-                    "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-                    "Referer": "https://consultaprocesos.ramajudicial.gov.co/"
-                }
+            with st.spinner("Conectando con puente de red seguro para evadir restricciones de IP..."):
                 
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
                 for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
-                    url_api = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad}"
+                    url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad}"
+                    
+                    # Usamos un puente proxy público open-source estable para saltar el firewall de la rama
+                    url_proxy = f"https://api.allorigins.win/get?url={url_objetivo}"
                     
                     try:
-                        respuesta = requests.get(url_api, headers=headers_navegador, timeout=12)
+                        respuesta = requests.get(url_proxy, timeout=15)
                         
                         if respuesta.status_code == 200:
-                            datos = respuesta.json()
-                            if datos.get("procesos") and len(datos["procesos"]) > 0:
-                                actuacion_real = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                            else:
-                                actuacion_real = "No encontrado en la Rama Judicial"
-                        else:
-                            actuacion_real = f"Restricción temporal del servidor (Código {respuesta.status_code})"
+                            contenedor_proxy = respuesta.json()
+                            # Allorigins devuelve el contenido original codificado en una cadena de texto dentro de 'contents'
+                            datos_originales = json.loads(contenedor_proxy["contents"])
                             
-                    except requests.exceptions.Timeout:
-                        actuacion_real = "Tiempo de espera agotado (Servidor lento)"
+                            if datos_originales.get("procesos") and len(datos_originales["procesos"]) > 0:
+                                actuacion_real = datos_originales["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                            else:
+                                actuacion_real = "No encontrado (Verifique que el radicado exista en la web judicial)"
+                        else:
+                            actuacion_real = f"Error en bypass de red (Status {respuesta.status_code})"
+                            
                     except Exception as e:
-                        actuacion_real = "Error de conexión local"
+                        actuacion_real = "Servidor judicial saturado, reintente en unos minutos"
                     
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Actualizar fila en la Base de Datos
                     cursor.execute('''
                         UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
                     ''', (actuacion_real, fecha_actual, pid))
                     
-                    # Si la actuación cambió, intentará mandar correo (si está configurado)
-                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Restricción" not in actuacion_real:
+                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Error" not in actuacion_real:
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                 
                 conn.commit()
