@@ -1,17 +1,16 @@
 import streamlit as st
 import sqlite3
-import requests
-import pandas as pd
 import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
+import streamlit.components.v1 as components
 import json
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
-# CONFIGURACIÓN DE CORREO SALIENTE (Conectado a los Secrets de Streamlit)
+# CONFIGURACIÓN DE CORREO SALIENTE
 SMTP_SERVER = st.secrets["correo"]["smtp_server"]
 SMTP_PORT = st.secrets["correo"]["smtp_port"]
 EMAIL_EMISOR = st.secrets["correo"]["email_emisor"]
@@ -46,7 +45,7 @@ def enviar_alerta_correo(correo_destino, radicado, nombre_caso, nueva_actuacion)
     except Exception:
         return False
 
-# BASE DE DATOS ROBUSTA
+# BASE DE DATOS
 def conectar_db():
     conn = sqlite3.connect("procesos.db")
     cursor = conn.cursor()
@@ -76,38 +75,13 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-def consultar_rama_judicial(radicado):
-    # Usamos CodeTabs como puente limpio para saltar el firewall de la Rama Judicial
-    target_url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
-    url = f"https://api.codetabs.com/v1/proxy?quest={target_url}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=20)
-        
-        if response.status_code == 200:
-            # CodeTabs devuelve el JSON crudo directamente sin envoltorios extra
-            datos = response.json()
-            
-            if "procesos" in datos and len(datos["procesos"]) > 0:
-                ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                return ultima_actuacion
-            else:
-                return "No se encontraron registros activos para este radicado"
-        else:
-            return f"Línea saturada (Código: {response.status_code})"
-            
-    except Exception:
-        return "El servidor judicial requiere un reintento"
-
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
     st.session_state["logeado"] = False
     st.session_state["usuario_id"] = None
     st.session_state["usuario_correo"] = ""
+if "proceso_a_revisar" not in st.session_state:
+    st.session_state["proceso_a_revisar"] = None
 
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
@@ -220,10 +194,54 @@ else:
     procesos_usuario = cursor.fetchall()
     conn.close()
 
+    # TÚNEL INVISIBLE JAVASCRIPT (Ejecuta la petición desde tu navegador local)
+    if st.session_state["proceso_a_revisar"]:
+        pid_r, rad_r, nombre_r, anterior_r = st.session_state["proceso_a_revisar"]
+        
+        # Inyectamos código JS que corre en tu PC y manda el resultado de vuelta a Streamlit
+        js_injector = f"""
+        <script>
+            fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad_r}")
+            .then(response => response.json())
+            .then(data => {{
+                if(data.procesos && data.procesos.length > 0) {{
+                    let actuacion = data.procesos[0].ultimaActuacion || "Sin actuaciones recientes";
+                    window.parent.postMessage({{type: 'streamlit:setComponentValue', value: actuacion}}, '*');
+                }} else {{
+                    window.parent.postMessage({{type: 'streamlit:setComponentValue', value: 'No encontrado en Rama Judicial'}, '*');
+                }}
+            }})
+            .catch(error => {{
+                window.parent.postMessage({{type: 'streamlit:setComponentValue', value: 'Reintente consulta local'}, '*');
+            }});
+        </script>
+        """
+        # Ejecución del puente del navegador
+        respuesta_navegador = components.html(js_injector, height=0, width=0)
+        
+        if respuesta_navegador:
+            actuacion_real = str(respuesta_navegador)
+            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+            
+            # Guardamos los datos reales extraídos de tu IP residencial
+            conn = conectar_db()
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
+            ''', (actuacion_real, fecha_actual, pid_r))
+            conn.commit()
+            conn.close()
+            
+            if actuacion_real != anterior_r and anterior_r != "Pendiente de revisión" and "Reintente" not in actuacion_real:
+                enviar_alerta_correo(st.session_state["usuario_correo"], rad_r, nombre_r, actuacion_real)
+                
+            st.session_state["proceso_a_revisar"] = None
+            st.rerun()
+
     if procesos_usuario:
         for pid, rad, nombre, actuacion, revision in procesos_usuario:
             with st.container(border=True):
-                col_info, col_boton = st.columns([5, 1.5])
+                col_info, col_boton = st.columns([4.5, 1.5])
                 
                 with col_info:
                     st.markdown(f"**⚖️ Radicado:** `{rad}`")
@@ -243,28 +261,11 @@ else:
                         
         st.markdown("---")
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            with st.spinner("Conectando con el circuito judicial..."):
-                conn = conectar_db()
-                cursor = conn.cursor()
-                
-                alertas_disparadas = 0
-                for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
-                    actuacion_actual = consultar_rama_judicial(rad)
-                    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    
-                    if "saturada" not in actuacion_actual and "reintento" not in actuacion_actual:
-                        if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
-                            enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
-                            alertas_disparadas += 1
-                    
-                    cursor.execute('''
-                        UPDATE radicados 
-                        SET ultima_actuacion = ?, fecha_ultima_revision = ?
-                        WHERE id = ?
-                    ''', (actuacion_actual, fecha_actual, pid))
-                
-                conn.commit()
-                conn.close()
-                st.rerun()
+            # Tomamos el primer proceso para pasarlo por el túnel del navegador del cliente
+            # Al recargarse procesará los siguientes uno a uno automáticamente
+            for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
+                st.session_state["proceso_a_revisar"] = (pid, rad, nombre, actuacion_anterior)
+                break
+            st.rerun()
     else:
         st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
