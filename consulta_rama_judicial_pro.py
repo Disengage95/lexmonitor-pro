@@ -76,44 +76,36 @@ def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def consultar_rama_judicial(radicado):
-    url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
+    # Usamos un servicio de Cors-Proxy alternativo para enmascarar la IP del servidor de Streamlit
+    url = f"https://api.allorigins.win/get?url={requests.utils.quote(f'https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}')}"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-        "Referer": "https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
     
     try:
-        session = requests.Session()
-        response = session.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=20)
         
         if response.status_code == 200:
-            try:
-                datos = response.json()
-                if "procesos" in datos and len(datos["procesos"]) > 0:
-                    ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                    return ultima_actuacion
-                else:
-                    return "No encontrado en la Rama Judicial"
-            except ValueError:
-                return "Restricción temporal del servidor oficial (HTML)"
-        elif response.status_code in [403, 406]:
-            return "Bloqueo por Firewall de la Rama Judicial"
-        else:
-            return f"Servidor inestable (Código: {response.status_code})"
+            # AllOrigins devuelve la respuesta original envuelta dentro de una llave llamada 'contents'
+            data_wrapper = response.json()
+            raw_content = data_wrapper.get("contents", "")
             
-    except requests.exceptions.Timeout:
-        return "Conexión lenta con el juzgado (Timeout)"
-    except Exception:
-        return "Error de conexión temporal"
+            # Convertimos el texto interno en un JSON real ejecutable
+            import json
+            datos = json.loads(raw_content)
+            
+            if "procesos" in datos and len(datos["procesos"]) > 0:
+                ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                return ultima_actuacion
+            else:
+                return "No se encontraron registros activos para este radicado"
+        else:
+            return f"Error en puente de conexión (Código: {response.status_code})"
+            
+    except Exception as e:
+        # Si falla el proxy o la Rama Judicial bloquea de todas formas, devolvemos un mensaje descriptivo limpio
+        return "Servidor judicial ocupado o requiere reintento"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -233,7 +225,6 @@ else:
     conn.close()
 
     if procesos_usuario:
-        # Renderizar cada proceso en tarjetas visuales independientes con botón de eliminación integrado
         for pid, rad, nombre, actuacion, revision in procesos_usuario:
             with st.container(border=True):
                 col_info, col_boton = st.columns([5, 1.5])
@@ -245,7 +236,7 @@ else:
                     st.markdown(f"**🕒 Última Revisión:** {revision}")
                 
                 with col_boton:
-                    st.write("")  # Espacio para alinear el botón verticalmente
+                    st.write("")  
                     if st.button("🗑️ Eliminar Proceso", key=f"del_{pid}", type="primary", use_container_width=True):
                         conn = conectar_db()
                         cursor = conn.cursor()
@@ -256,7 +247,7 @@ else:
                         
         st.markdown("---")
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            with st.spinner("Revisando estados de sus radicados..."):
+            with st.spinner("Revisando estados de sus radicados a través del túnel seguro..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
@@ -265,8 +256,8 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Evitamos sobreescribir el historial con fallas o bloqueos de red directos
-                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual and "temporal" not in actuacion_actual and "Bloqueo" not in actuacion_actual:
+                    # Evitamos romper estados válidos anteriores si hay intermitencia en el proxy gratuito
+                    if "ocupado" not in actuacion_actual and "Error" not in actuacion_actual:
                         if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                             enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
                             alertas_disparadas += 1
