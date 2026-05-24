@@ -6,6 +6,7 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
+import json
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -76,8 +77,9 @@ def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 def consultar_rama_judicial(radicado):
-    # Usamos un servicio de Cors-Proxy alternativo para enmascarar la IP del servidor de Streamlit
-    url = f"https://api.allorigins.win/get?url={requests.utils.quote(f'https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}')}"
+    # Usamos CodeTabs como puente limpio para saltar el firewall de la Rama Judicial
+    target_url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
+    url = f"https://api.codetabs.com/v1/proxy?quest={target_url}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -87,13 +89,8 @@ def consultar_rama_judicial(radicado):
         response = requests.get(url, headers=headers, timeout=20)
         
         if response.status_code == 200:
-            # AllOrigins devuelve la respuesta original envuelta dentro de una llave llamada 'contents'
-            data_wrapper = response.json()
-            raw_content = data_wrapper.get("contents", "")
-            
-            # Convertimos el texto interno en un JSON real ejecutable
-            import json
-            datos = json.loads(raw_content)
+            # CodeTabs devuelve el JSON crudo directamente sin envoltorios extra
+            datos = response.json()
             
             if "procesos" in datos and len(datos["procesos"]) > 0:
                 ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
@@ -101,11 +98,10 @@ def consultar_rama_judicial(radicado):
             else:
                 return "No se encontraron registros activos para este radicado"
         else:
-            return f"Error en puente de conexión (Código: {response.status_code})"
+            return f"Línea saturada (Código: {response.status_code})"
             
-    except Exception as e:
-        # Si falla el proxy o la Rama Judicial bloquea de todas formas, devolvemos un mensaje descriptivo limpio
-        return "Servidor judicial ocupado o requiere reintento"
+    except Exception:
+        return "El servidor judicial requiere un reintento"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -247,7 +243,7 @@ else:
                         
         st.markdown("---")
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            with st.spinner("Revisando estados de sus radicados a través del túnel seguro..."):
+            with st.spinner("Conectando con el circuito judicial..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
@@ -256,8 +252,7 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Evitamos romper estados válidos anteriores si hay intermitencia en el proxy gratuito
-                    if "ocupado" not in actuacion_actual and "Error" not in actuacion_actual:
+                    if "saturada" not in actuacion_actual and "reintento" not in actuacion_actual:
                         if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                             enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
                             alertas_disparadas += 1
