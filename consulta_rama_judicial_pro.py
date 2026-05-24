@@ -194,36 +194,34 @@ else:
     procesos_usuario = cursor.fetchall()
     conn.close()
 
-    # TÚNEL INVISIBLE JAVASCRIPT (Ejecuta la petición desde tu navegador local)
+    # TÚNEL INVISIBLE CORREGIDO SIN F-STRING
     if st.session_state["proceso_a_revisar"]:
         pid_r, rad_r, nombre_r, anterior_r = st.session_state["proceso_a_revisar"]
         
-        # Inyectamos código JS que corre en tu PC y manda el resultado de vuelta a Streamlit
-        js_injector = f"""
+        js_base = """
         <script>
-            fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad_r}")
+            fetch("https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/NUMERO_RADICADO_AQUI")
             .then(response => response.json())
-            .then(data => {{
-                if(data.procesos && data.procesos.length > 0) {{
+            .then(data => {
+                if(data.procesos && data.procesos.length > 0) {
                     let actuacion = data.procesos[0].ultimaActuacion || "Sin actuaciones recientes";
-                    window.parent.postMessage({{type: 'streamlit:setComponentValue', value: actuacion}}, '*');
-                }} else {{
-                    window.parent.postMessage({{type: 'streamlit:setComponentValue', value: 'No encontrado en Rama Judicial'}, '*');
-                }}
-            }})
-            .catch(error => {{
-                window.parent.postMessage({{type: 'streamlit:setComponentValue', value: 'Reintente consulta local'}, '*');
-            }});
+                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: actuacion}, '*');
+                } else {
+                    window.parent.postMessage({type: 'streamlit:setComponentValue', value: 'No encontrado en Rama Judicial'}, '*');
+                }
+            })
+            .catch(error => {
+                window.parent.postMessage({type: 'streamlit:setComponentValue', value: 'Reintente consulta local'}, '*');
+            });
         </script>
         """
-        # Ejecución del puente del navegador
+        js_injector = js_base.replace("NUMERO_RADICADO_AQUI", str(rad_r))
         respuesta_navegador = components.html(js_injector, height=0, width=0)
         
         if respuesta_navegador:
             actuacion_real = str(respuesta_navegador)
             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
             
-            # Guardamos los datos reales extraídos de tu IP residencial
             conn = conectar_db()
             cursor = conn.cursor()
             cursor.execute('''
@@ -261,8 +259,6 @@ else:
                         
         st.markdown("---")
         if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            # Tomamos el primer proceso para pasarlo por el túnel del navegador del cliente
-            # Al recargarse procesará los siguientes uno a uno automáticamente
             for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
                 st.session_state["proceso_a_revisar"] = (pid, rad, nombre, actuacion_anterior)
                 break
