@@ -211,6 +211,9 @@ else:
         st.dataframe(df, use_container_width=True)
         
         if st.button("🔄 Ejecutar Revisión Diaria de Términos"):
+            # LÍNEA TEMPORAL DE PRUEBA DE CORREO
+            enviar_alerta_correo(st.session_state.usuario_email, "12345678901234567890123", "Proceso de Prueba Exitoso", "Esta es una actuación ficticia para verificar las alertas en la nube.")
+            st.success("¡Correo de prueba forzado enviado!")
             with st.spinner("Revisando estados de sus radicados..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
