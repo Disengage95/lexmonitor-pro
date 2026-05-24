@@ -261,4 +261,24 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    if "Error" not in actuacion_actual and "re
+                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual:
+                        if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
+                            enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
+                            alertas_disparadas += 1
+                    
+                    cursor.execute('''
+                        UPDATE radicados 
+                        SET ultima_actuacion = ?, fecha_ultima_revision = ?
+                        WHERE id = ?
+                    ''', (actuacion_actual, fecha_actual, pid))
+                
+                conn.commit()
+                conn.close()
+                
+                if alertas_disparadas > 0:
+                    st.success(f"ℹ️ Revisión terminada. Se detectaron {alertas_disparadas} cambios y se enviaron las alertas.")
+                else:
+                    st.success("ℹ️ Sus procesos se han actualizado. No se detectaron cambios nuevos.")
+                st.rerun()
+    else:
+        st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
