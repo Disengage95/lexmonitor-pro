@@ -222,8 +222,8 @@ else:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # CAMBIO TEMPORAL: Forzar envío en modo prueba (if True:)
-                    if True:
+                    # Validación real comercial: Solo envía si hay cambios y no es un radicado nuevo
+                    if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
                         alertas_disparadas += 1
                     
