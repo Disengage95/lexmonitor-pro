@@ -78,16 +78,24 @@ def encriptar_password(password):
 def consultar_rama_judicial(radicado):
     url = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
+    # Cabeceras emulando un navegador real para evadir bloqueos básicos de Streamlit Cloud
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "es-ES,es;q=0.9",
+        "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
         "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-        "Connection": "keep-alive"
+        "Referer": "https://consultaprocesos.ramajudicial.gov.co/Procesos/NumeroRadicacion",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=12)
+        # Usamos una sesión para mantener cookies activas durante la consulta
+        session = requests.Session()
+        response = session.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
             try:
@@ -96,18 +104,18 @@ def consultar_rama_judicial(radicado):
                     ultima_actuacion = datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
                     return ultima_actuacion
                 else:
-                    return "No encontrado en Rama Judicial"
+                    return "No encontrado en la Rama Judicial"
             except ValueError:
-                return "Respuesta inválida del servidor oficial"
-        elif response.status_code == 403 or response.status_code == 406:
-            return "Acceso restringido por firewall de la Rama Judicial"
+                return "Restricción temporal del servidor oficial (HTML)"
+        elif response.status_code in [403, 406]:
+            return "Bloqueo por Firewall de la Rama Judicial"
         else:
-            return f"Servidor fuera de servicio (Código: {response.status_code})"
+            return f"Servidor inestable (Código: {response.status_code})"
             
     except requests.exceptions.Timeout:
-        return "Servidor de la Rama Judicial lento (Timeout)"
+        return "Conación lenta con el juzgado (Timeout)"
     except Exception:
-        return "Error temporal de conexión"
+        return "Error de conexión temporal"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -215,53 +223,52 @@ else:
                 st.error("❌ El radicado debe tener 21 o 23 dígitos numéricos.")
 
     st.header("📋 Tus Procesos Activos")
+    
     conn = conectar_db()
-    df = pd.read_sql_query('''
-        SELECT id, numero_radicado as 'Radicado', nombre_caso as 'Caso / Cliente', 
-               ultima_actuacion as 'Última Actuación', fecha_ultima_revision as 'Última Revisión' 
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, numero_radicado, nombre_caso, ultima_actuacion, fecha_ultima_revision 
         FROM radicados 
         WHERE usuario_id = ?
-    ''', conn, params=(st.session_state["usuario_id"],))
+    ''', (st.session_state["usuario_id"],))
+    procesos_usuario = cursor.fetchall()
     conn.close()
 
-    if not df.empty:
-        # Habilitamos st.data_editor ocultando la columna 'id' pero usándola para borrar filas seleccionadas
-        tabla_editable = st.data_editor(
-            df,
-            column_config={"id": None},  # Oculta la columna de ID interno
-            disabled=["Radicado", "Caso / Cliente", "Última Actuación", "Última Revisión"],
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor_procesos"
-        )
-        
-        # Verificar si el usuario eliminó filas en la interfaz de Streamlit
-        if st.session_state["editor_procesos"]["deleted_rows"]:
-            indices_a_borrar = st.session_state["editor_procesos"]["deleted_rows"]
-            conn = conectar_db()
-            cursor = conn.cursor()
-            for idx in indices_a_borrar:
-                id_base_datos = int(df.iloc[idx]['id'])
-                cursor.execute("DELETE FROM radicados WHERE id = ?", (id_base_datos,))
-            conn.commit()
-            conn.close()
-            st.success("🗑️ Radicado(s) eliminado(s) correctamente.")
-            st.rerun()
-            
+    if procesos_usuario:
+        # Renderizar cada proceso en tarjetas visuales independientes
+        for pid, rad, nombre, actuacion, revision in procesos_usuario:
+            with st.container(border=True):
+                col_info, col_boton = st.columns([5, 1.2])
+                
+                with col_info:
+                    st.markdown(f"**⚖️ Radicado:** `{rad}`")
+                    st.markdown(f"**👤 Caso / Cliente:** {nombre}")
+                    st.markdown(f"**📄 Última Actuación:** {actuacion}")
+                    st.markdown(f"**🕒 Última Revisión:** {revision}")
+                
+                with col_boton:
+                    st.write("")  # Alineación visual
+                    if st.button("🗑️ Eliminar Proceso", key=f"del_{pid}", type="primary", use_container_width=True):
+                        conn = conectar_db()
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM radicados WHERE id = ?", (pid,))
+                        conn.commit()
+                        conn.close()
+                        st.rerun()
+                        
         st.markdown("---")
-        if st.button("🔄 Ejecutar Revisión Diaria de Términos"):
+        if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
             with st.spinner("Revisando estados de sus radicados..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, numero_radicado, nombre_caso, ultima_actuacion FROM radicados WHERE usuario_id = ?", (st.session_state["usuario_id"],))
-                procesos = cursor.fetchall()
                 
                 alertas_disparadas = 0
-                for pid, rad, nombre, actuacion_anterior in procesos:
+                for pid, rad, nombre, actuacion_anterior in procesos_usuario:
                     actuacion_actual = consultar_rama_judicial(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual:
+                    # Filtramos errores para no sobreescribir estados reales previos si el servidor se cae
+                    if "Error" not in actuacion_actual and "restringido" not in actuacion_actual and "inválida" not in actuacion_actual and "lento" not in actuacion_actual and "temporal" not in actuacion_actual and "Bloqueo" not in actuacion_actual:
                         if actuacion_actual != actuacion_anterior and actuacion_anterior != "Pendiente de revisión":
                             enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_actual)
                             alertas_disparadas += 1
@@ -278,8 +285,7 @@ else:
                 if alertas_disparadas > 0:
                     st.success(f"ℹ️ Revisión terminada. Se detectaron {alertas_disparadas} cambios y se enviaron las alertas.")
                 else:
-                    st.success("ℹ️ Sus procesos se han actualizado. No se detectaron cambios nuevos.")
+                    st.success("ℹ️ Sus procesos se han actualizado.")
                 st.rerun()
     else:
         st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
-        #ff
