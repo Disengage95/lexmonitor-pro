@@ -5,10 +5,8 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 import json
-import requests
+import cloudscraper
 import time
-from requests.adapters import HTTPAdapter
-from urllib3.util import Retry
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -89,35 +87,16 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-# FUNCIÓN CON REINTENTOS AVANZADOS LOGARÍTMICOS
+# FUNCIÓN OPTIMIZADA CON CLOUDSCRAPER PARA EVITAR RECORTES DE RED
 def consultar_rama_judicial_individual(radicado):
     url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
-    cabeceras = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
-        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-        "Referer": "https://consultaprocesos.ramajudicial.gov.co/",
-        "Connection": "keep-alive"
-    }
-    
-    session = requests.Session()
-    
-    # Estrategia de reintentos: Si falla (códigos 500, 502, 503, 504), espera y reintenta automáticamente
-    estrategia_reintentos = Retry(
-        total=3,  # Número de intentos máximos
-        backoff_factor=2,  # Tiempo de espera incremental entre intentos (2s, 4s, 8s...)
-        status_forcelist=[500, 502, 503, 504],
-        raise_on_status=False
-    )
-    
-    adaptador = HTTPAdapter(max_retries=estrategia_reintentos)
-    session.mount("https://", adaptador)
-    
     try:
-        # Aumentamos el tiempo límite de espera a 15 segundos para darle margen al servidor
-        respuesta = session.get(url_objetivo, headers=cabeceras, timeout=15)
+        # Crea un scraper que emula un navegador de escritorio real (Chrome en Windows)
+        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+        
+        # Realiza la petición evadiendo las firmas de automatización estándar
+        respuesta = scraper.get(url_objetivo, timeout=15)
         
         if respuesta.status_code == 200:
             datos = respuesta.json()
@@ -128,13 +107,11 @@ def consultar_rama_judicial_individual(radicado):
         elif respuesta.status_code == 404:
             return "Número de radicado inexistente"
         elif respuesta.status_code == 403:
-            return "Acceso denegado temporalmente por seguridad del portal"
+            return "Acceso denegado temporalmente por el firewall judicial"
         else:
-            return f"Portal en mantenimiento o inestable (Código {respuesta.status_code})"
-    except requests.exceptions.Timeout:
-        return "El servidor de la Rama Judicial está saturado y no respondió a tiempo"
-    except Exception:
-        return "Error de conexión con la red judicial, intente de nuevo"
+            return f"Portal judicial inestable o en mantenimiento (Código {respuesta.status_code})"
+    except Exception as e:
+        return "El portal judicial rechazó la conexión masiva, reintente en unos minutos"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -271,7 +248,7 @@ else:
                     st.write("")  
                     # BOTÓN DE CONSULTA INDIVIDUAL INDEPENDIENTE
                     if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
-                        with st.spinner("Estableciendo conexión persistente con los servidores judiciales..."):
+                        with st.spinner("Bypasando controles perimetrales e indexando actuación..."):
                             actuacion_real = consultar_rama_judicial_individual(rad)
                             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
@@ -283,8 +260,7 @@ else:
                             conn.commit()
                             conn.close()
                             
-                            # Filtro para que no envíe correos si la respuesta fue un error de red o timeout
-                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "saturado" not in actuacion_real.lower() and "error" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower():
+                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "rechazó" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower() and "inestable" not in actuacion_real.lower():
                                 enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                                 
                             st.rerun()
@@ -300,9 +276,9 @@ else:
                         
         st.markdown("---")
         
-        # BOTÓN GLOBAL CON TIEMPO DE ESPERA ENTRE PROCESOS
+        # BOTÓN GLOBAL CON PROTECCIÓN HUMANA EXTENDIDA
         if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
-            with st.spinner("Actualizando bitácora masiva de radicados..."):
+            with st.spinner("Sincronizando expedientes activos con protección perimetral..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
@@ -314,11 +290,11 @@ else:
                         UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
                     ''', (actuacion_real, fecha_actual, pid))
                     
-                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "saturado" not in actuacion_real.lower() and "error" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower():
+                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "rechazó" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower() and "inestable" not in actuacion_real.lower():
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                     
-                    # Pausa de cortesía de 2.5 segundos entre radicado y radicado para evitar bloqueos IP
-                    time.sleep(2.5)
+                    # Espera preventiva de 3 segundos para camuflar el tráfico secuencial
+                    time.sleep(3.0)
                 
                 conn.commit()
                 conn.close()
