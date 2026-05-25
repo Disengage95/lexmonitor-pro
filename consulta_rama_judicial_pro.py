@@ -86,6 +86,24 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
+# FUNCIÓN INDIVIDUAL DE CONSULTA (Bypass de Red Seguro)
+def consultar_rama_judicial_individual(radicado):
+    url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
+    url_proxy = f"https://api.allorigins.win/get?url={url_objetivo}"
+    try:
+        respuesta = requests.get(url_proxy, timeout=15)
+        if respuesta.status_code == 200:
+            contenedor_proxy = respuesta.json()
+            datos_originales = json.loads(contenedor_proxy["contents"])
+            if datos_originales.get("procesos") and len(datos_originales["procesos"]) > 0:
+                return datos_originales["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+            else:
+                return "No encontrado (Verifique que el radicado exista en la web judicial)"
+        else:
+            return f"Error en bypass de red (Status {respuesta.status_code})"
+    except Exception:
+        return "Servidor judicial saturado, reintente en unos minutos"
+
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
     st.session_state["logeado"] = False
@@ -209,7 +227,7 @@ else:
     if procesos_usuario:
         for pid, rad, nombre, actuacion, revision in procesos_usuario:
             with st.container(border=True):
-                col_info, col_boton = st.columns([4.5, 1.5])
+                col_info, col_acciones = st.columns([4.2, 1.8])
                 
                 with col_info:
                     st.markdown(f"**⚖️ Radicado:** `{rad}`")
@@ -217,8 +235,30 @@ else:
                     st.markdown(f"**📄 Última Actuación:** {actuacion}")
                     st.markdown(f"**🕒 Última Revisión:** {revision}")
                 
-                with col_boton:
+                with col_acciones:
                     st.write("")  
+                    # BOTÓN DE CONSULTA INDIVIDUAL
+                    if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
+                        with st.spinner("Consultando proceso..."):
+                            actuacion_real = consultar_rama_judicial_individual(rad)
+                            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            
+                            # Guardar en base de datos inmediatamente
+                            conn = conectar_db()
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
+                            ''', (actuacion_real, fecha_actual, pid))
+                            conn.commit()
+                            conn.close()
+                            
+                            # Alerta por correo si cambió
+                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "Error" not in actuacion_real:
+                                enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
+                                
+                            st.rerun()
+                    
+                    # BOTÓN DE ELIMINAR INDIVIDUAL
                     if st.button("🗑️ Eliminar Proceso", key=f"del_{pid}", type="primary", use_container_width=True):
                         conn = conectar_db()
                         cursor = conn.cursor()
@@ -229,37 +269,14 @@ else:
                         
         st.markdown("---")
         
-        # EXTRACCIÓN MEDIANTE CORS-PROXY DE SERVIDOR PARA EVITAR BLOQUEOS DE IP RESIDENCIAL
-        if st.button("🔄 Ejecutar Revisión Diaria de Términos", type="secondary"):
-            with st.spinner("Conectando con puente de red seguro para evadir restricciones de IP..."):
-                
+        # BOTÓN GLOBAL (POR SI ACASO SE REQUIERE ACTUALIZAR TODO AL TIEMPO)
+        if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
+            with st.spinner("Actualizando todo el historial de procesos..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
                 for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
-                    url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{rad}"
-                    
-                    # Usamos un puente proxy público open-source estable para saltar el firewall de la rama
-                    url_proxy = f"https://api.allorigins.win/get?url={url_objetivo}"
-                    
-                    try:
-                        respuesta = requests.get(url_proxy, timeout=15)
-                        
-                        if respuesta.status_code == 200:
-                            contenedor_proxy = respuesta.json()
-                            # Allorigins devuelve el contenido original codificado en una cadena de texto dentro de 'contents'
-                            datos_originales = json.loads(contenedor_proxy["contents"])
-                            
-                            if datos_originales.get("procesos") and len(datos_originales["procesos"]) > 0:
-                                actuacion_real = datos_originales["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                            else:
-                                actuacion_real = "No encontrado (Verifique que el radicado exista en la web judicial)"
-                        else:
-                            actuacion_real = f"Error en bypass de red (Status {respuesta.status_code})"
-                            
-                    except Exception as e:
-                        actuacion_real = "Servidor judicial saturado, reintente en unos minutos"
-                    
+                    actuacion_real = consultar_rama_judicial_individual(rad)
                     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
                     cursor.execute('''
