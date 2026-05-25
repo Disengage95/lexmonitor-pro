@@ -5,7 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
 import json
-from requests_html import HTMLSession
+import requests
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -86,22 +86,24 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-# FUNCIÓN DE CONSULTA EMULADA ANTI-BLOQUEOS
+# FUNCIÓN CON CONEXIÓN SESIÓN DE AGENT CONFIABLE
 def consultar_rama_judicial_individual(radicado):
     url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
-    # Configuramos cabeceras idénticas a las de un navegador Chrome real en Windows 11
+    # Encabezados con tokens de imitación estándar para que la Rama Judicial acepte la petición
     cabeceras = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "es-ES,es;q=0.9",
+        "Accept-Language": "es-419,es;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
         "Origin": "https://consultaprocesos.ramajudicial.gov.co",
-        "Referer": "https://consultaprocesos.ramajudicial.gov.co/"
+        "Referer": "https://consultaprocesos.ramajudicial.gov.co/",
+        "Connection": "keep-alive"
     }
     
     try:
-        # Iniciamos una sesión HTML avanzada
-        session = HTMLSession()
+        # El uso de Session mantiene las cookies que requiere el firewall del servidor
+        session = requests.Session()
         respuesta = session.get(url_objetivo, headers=cabeceras, timeout=12)
         
         if respuesta.status_code == 200:
@@ -109,13 +111,13 @@ def consultar_rama_judicial_individual(radicado):
             if datos.get("procesos") and len(datos["procesos"]) > 0:
                 return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
             else:
-                return "No encontrado en la base de datos judicial"
+                return "No se encontraron registros de este radicado"
         elif respuesta.status_code == 404:
-            return "El número de radicado no existe en el sistema"
+            return "Número de radicado inexistente"
         else:
-            return f"Acceso restringido por el servidor judicial (Código {respuesta.status_code})"
+            return f"Acceso limitado por congestión judicial (Código {respuesta.status_code})"
     except Exception:
-        return "El servidor judicial tardó demasiado en responder, intente de nuevo"
+        return "El portal judicial tardó demasiado en responder, reintente"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -126,7 +128,7 @@ if "logeado" not in st.session_state:
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
 if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: Utilizando emulación de navegador de escritorio.")
+    st.warning("⚠️ Modo Local Activo: Entorno de red saneado y optimizado.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -252,7 +254,7 @@ else:
                     st.write("")  
                     # BOTÓN DE CONSULTA INDIVIDUAL INDEPENDIENTE
                     if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
-                        with st.spinner("Simulando entorno de navegación seguro..."):
+                        with st.spinner("Conectando de forma segura con el servidor judicial..."):
                             actuacion_real = consultar_rama_judicial_individual(rad)
                             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
@@ -264,7 +266,7 @@ else:
                             conn.commit()
                             conn.close()
                             
-                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "Error" not in actuacion_real and "Acceso" not in actuacion_real:
+                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "limitado" not in actuacion_real and "demasiado" not in actuacion_real:
                                 enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                                 
                             st.rerun()
@@ -280,9 +282,9 @@ else:
                         
         st.markdown("---")
         
-        # BOTÓN GLOBAL CON MANEJO EMULADO
+        # BOTÓN GLOBAL CORREGIDO
         if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
-            with st.spinner("Actualizando historial completo mediante emulación segura..."):
+            with st.spinner("Actualizando bitácora de expedientes..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
@@ -294,7 +296,7 @@ else:
                         UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
                     ''', (actuacion_real, fecha_actual, pid))
                     
-                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Error" not in actuacion_real and "Acceso" not in actuacion_real:
+                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "limitado" not in actuacion_real and "demasiado" not in actuacion_real:
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                 
                 conn.commit()
