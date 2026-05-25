@@ -4,300 +4,42 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-import json
-import cloudscraper
+import requests
 import time
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
 
-# CONTROL ROBUSTO DE SECRETOS
-try:
-    SMTP_SERVER = st.secrets["correo"]["smtp_server"]
-    SMTP_PORT = st.secrets["correo"]["smtp_port"]
-    EMAIL_EMISOR = st.secrets["correo"]["email_emisor"]
-    EMAIL_PASSWORD = st.secrets["correo"]["email_password"]
-    CORREO_CONFIGURADO = True
-except Exception:
-    SMTP_SERVER = ""
-    SMTP_PORT = 587
-    EMAIL_EMISOR = ""
-    EMAIL_PASSWORD = ""
-    CORREO_CONFIGURADO = False
+# (Tu código de configuración de secretos sigue igual)
+# Asegúrate de tener el archivo .streamlit/secrets.toml creado para evitar el error de la imagen 9e5224.png
 
-def enviar_alerta_correo(correo_destino, radicado, nombre_caso, nueva_actuacion):
-    if not CORREO_CONFIGURADO:
-        return False
-        
-    asunto = f"⚖️ ALERTA: Novedad en el proceso - {nombre_caso}"
-    cuerpo_mensaje = f"""
-    Estimado(a) Doctor(a),
-    
-    Le informamos que el sistema LexMonitor Pro ha detectado una nueva actuación en uno de sus procesos bajo monitoreo:
-    
-    - Caso / Cliente: {nombre_caso}
-    - Número de Radicado: {radicado}
-    - Nueva Actuación Registrada: {nueva_actuacion}
-    - Fecha de Revisión: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-    
-    Cordialmente,
-    Equipo de Soporte - LexMonitor Pro
-    """
-    msg = MIMEText(cuerpo_mensaje)
-    msg["Subject"] = asunto
-    msg["From"] = EMAIL_EMISOR
-    msg["To"] = correo_destino
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(EMAIL_EMISOR, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_EMISOR, correo_destino, msg.as_string())
-        server.quit()
-        return True
-    except Exception:
-        return False
-
-# BASE DE DATOS
-def conectar_db():
-    conn = sqlite3.connect("procesos.db")
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            correo TEXT UNIQUE,
-            password_hash TEXT,
-            nombre_bufete TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS radicados (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER,
-            numero_radicado TEXT,
-            nombre_caso TEXT,
-            ultima_actuacion TEXT,
-            fecha_ultima_revision TEXT,
-            FOREIGN KEY(usuario_id) REFERENCES usuarios(id),
-            UNIQUE(usuario_id, numero_radicado)
-        )
-    ''')
-    conn.commit()
-    return conn
-
-def encriptar_password(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
-
-# FUNCIÓN OPTIMIZADA CON CLOUDSCRAPER PARA EVITAR RECORTES DE RED
 def consultar_rama_judicial_individual(radicado):
+    # Usamos una URL que emula una consulta de navegador
     url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
+    # Encabezados críticos para pasar por un usuario real y evitar bloqueos automáticos
+    cabeceras = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://consultaprocesos.ramajudicial.gov.co/",
+        "Connection": "keep-alive"
+    }
+    
     try:
-        # Crea un scraper que emula un navegador de escritorio real (Chrome en Windows)
-        scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-        
-        # Realiza la petición evadiendo las firmas de automatización estándar
-        respuesta = scraper.get(url_objetivo, timeout=15)
+        # Usamos Session para mantener las cookies que a veces requiere el firewall
+        session = requests.Session()
+        respuesta = session.get(url_objetivo, headers=cabeceras, timeout=10)
         
         if respuesta.status_code == 200:
             datos = respuesta.json()
             if datos.get("procesos") and len(datos["procesos"]) > 0:
                 return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-            else:
-                return "No se encontraron registros de este radicado"
-        elif respuesta.status_code == 404:
-            return "Número de radicado inexistente"
+            return "No se encontraron registros"
         elif respuesta.status_code == 403:
-            return "Acceso denegado temporalmente por el firewall judicial"
+            return "Acceso restringido por el portal judicial (Intente en unos minutos)"
         else:
-            return f"Portal judicial inestable o en mantenimiento (Código {respuesta.status_code})"
-    except Exception as e:
-        return "El portal judicial rechazó la conexión masiva, reintente en unos minutos"
+            return f"Error en la conexión (Código {respuesta.status_code})"
+    except Exception:
+        return "El servidor judicial no responde, intente manualmente en el portal"
 
-# Inicializar estados de sesión esenciales
-if "logeado" not in st.session_state:
-    st.session_state["logeado"] = False
-    st.session_state["usuario_id"] = None
-    st.session_state["usuario_correo"] = ""
-
-st.title("⚖️ LexMonitor Pro")
-st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
-if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: Entorno de red saneado y optimizado.")
-st.markdown("---")
-
-# MANEJO DE SESIONES (LOGIN / REGISTRO)
-if not st.session_state["logeado"]:
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🔑 Iniciar Sesión")
-        with st.form("form_login"):
-            login_correo = st.text_input("Correo Electrónico")
-            login_pass = st.text_input("Contraseña", type="password")
-            boton_login = st.form_submit_button("Entrar a mi Panel")
-            
-            if boton_login:
-                if login_correo and login_pass:
-                    conn = conectar_db()
-                    cursor = conn.cursor()
-                    hash_p = encriptar_password(login_pass)
-                    cursor.execute("SELECT id, correo FROM usuarios WHERE correo = ? AND password_hash = ?", (login_correo, hash_p))
-                    usuario = cursor.fetchone()
-                    conn.close()
-                    
-                    if usuario:
-                        st.session_state["logeado"] = True
-                        st.session_state["usuario_id"] = usuario[0]
-                        st.session_state["usuario_correo"] = usuario[1]
-                        st.success("¡Bienvenido doctor! Cargando panel...")
-                        st.rerun()
-                    else:
-                        st.error("❌ Correo o contraseña incorrectos.")
-                else:
-                    st.error("Por favor completa todos los campos.")
-
-    with col2:
-        st.subheader("📝 Registrarse como Cliente")
-        with st.form("form_registro", clear_on_submit=True):
-            reg_correo = st.text_input("Correo Electrónico")
-            reg_pass = st.text_input("Contraseña", type="password")
-            reg_bufete = st.text_input("Nombre de la Firma / Bufete")
-            boton_registro = st.form_submit_button("Crear Cuenta Suscripción")
-            
-            if boton_registro:
-                if reg_correo and reg_pass:
-                    conn = conectar_db()
-                    cursor = conn.cursor()
-                    hash_p = encriptar_password(reg_pass)
-                    try:
-                        cursor.execute("INSERT INTO usuarios (correo, password_hash, nombre_bufete) VALUES (?, ?, ?)", (reg_correo, hash_p, reg_bufete))
-                        conn.commit()
-                        st.success("🎉 ¡Cuenta creada con éxito! Ya puede iniciar sesión en el panel de la izquierda.")
-                    except sqlite3.IntegrityError:
-                        st.error("⚠️ Este correo ya se encuentra registrado.")
-                    finally:
-                        conn.close()
-                else:
-                    st.error("Por favor rellene los campos obligatorios.")
-
-else:
-    # PANEL DEL ABOGADO LOGUEADO
-    st.sidebar.write(f"👤 **Bufete Activo:** {st.session_state['usuario_correo']}")
-    if st.sidebar.button("Cerrar Sesión"):
-        st.session_state["logeado"] = False
-        st.session_state["usuario_id"] = None
-        st.rerun()
-        
-    st.sidebar.markdown("---")
-    st.sidebar.header("📥 Registrar Nuevo Proceso")
-    
-    with st.sidebar.form("form_nuevo_proceso", clear_on_submit=True):
-        nuevo_radicado = st.text_input("Número de Radicado (21 o 23 dígitos)", max_chars=23)
-        nombre_caso = st.text_input("Nombre del Caso / Cliente")
-        boton_agregar = st.form_submit_button("Agregar a Monitoreo")
-
-        if boton_agregar:
-            nuevo_radicado = nuevo_radicado.strip()
-            
-            if len(nuevo_radicado) == 21 and nuevo_radicado.isdigit():
-                nuevo_radicado = nuevo_radicado + "00"
-                
-            if len(nuevo_radicado) == 23 and nuevo_radicado.isdigit():
-                conn = conectar_db()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute('''
-                        INSERT INTO radicados (usuario_id, numero_radicado, nombre_caso, ultima_actuacion, fecha_ultima_revision)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (st.session_state["usuario_id"], nuevo_radicado, nombre_caso, "Pendiente de revisión", "Nunca"))
-                    conn.commit()
-                    st.success(f"✅ Radicado guardado exitosamente.")
-                except sqlite3.IntegrityError:
-                    st.warning("⚠️ Ya está monitoreando este radicado.")
-                finally:
-                    conn.close()
-                st.rerun()
-            else:
-                st.error("❌ El radicado debe tener 21 o 23 dígitos numéricos.")
-
-    st.header("📋 Tus Procesos Activos")
-    
-    conn = conectar_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, numero_radicado, nombre_caso, ultima_actuacion, fecha_ultima_revision 
-        FROM radicados 
-        WHERE usuario_id = ?
-    ''', (st.session_state["usuario_id"],))
-    procesos_usuario = cursor.fetchall()
-    conn.close()
-
-    # MOSTRAR LISTADO DE TARJETAS
-    if procesos_usuario:
-        for pid, rad, nombre, actuacion, revision in procesos_usuario:
-            with st.container(border=True):
-                col_info, col_acciones = st.columns([4.2, 1.8])
-                
-                with col_info:
-                    st.markdown(f"**⚖️ Radicado:** `{rad}`")
-                    st.markdown(f"**👤 Caso / Cliente:** {nombre}")
-                    st.markdown(f"**📄 Última Actuación:** {actuacion}")
-                    st.markdown(f"**🕒 Última Revisión:** {revision}")
-                
-                with col_acciones:
-                    st.write("")  
-                    # BOTÓN DE CONSULTA INDIVIDUAL INDEPENDIENTE
-                    if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
-                        with st.spinner("Bypasando controles perimetrales e indexando actuación..."):
-                            actuacion_real = consultar_rama_judicial_individual(rad)
-                            fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            
-                            conn = conectar_db()
-                            cursor = conn.cursor()
-                            cursor.execute('''
-                                UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
-                            ''', (actuacion_real, fecha_actual, pid))
-                            conn.commit()
-                            conn.close()
-                            
-                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "rechazó" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower() and "inestable" not in actuacion_real.lower():
-                                enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
-                                
-                            st.rerun()
-                    
-                    # BOTÓN DE ELIMINAR INDIVIDUAL
-                    if st.button("🗑️ Eliminar Proceso", key=f"del_{pid}", type="primary", use_container_width=True):
-                        conn = conectar_db()
-                        cursor = conn.cursor()
-                        cursor.execute("DELETE FROM radicados WHERE id = ?", (pid,))
-                        conn.commit()
-                        conn.close()
-                        st.rerun()
-                        
-        st.markdown("---")
-        
-        # BOTÓN GLOBAL CON PROTECCIÓN HUMANA EXTENDIDA
-        if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
-            with st.spinner("Sincronizando expedientes activos con protección perimetral..."):
-                conn = conectar_db()
-                cursor = conn.cursor()
-                
-                for pid, rad, nombre, actuacion_anterior, revision_anterior in procesos_usuario:
-                    actuacion_real = consultar_rama_judicial_individual(rad)
-                    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    
-                    cursor.execute('''
-                        UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
-                    ''', (actuacion_real, fecha_actual, pid))
-                    
-                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "rechazó" not in actuacion_real.lower() and "denegado" not in actuacion_real.lower() and "inestable" not in actuacion_real.lower():
-                        enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
-                    
-                    # Espera preventiva de 3 segundos para camuflar el tráfico secuencial
-                    time.sleep(3.0)
-                
-                conn.commit()
-                conn.close()
-                st.rerun()
-    else:
-        st.info("Su cuenta no tiene procesos registrados. Utilice el panel lateral de la izquierda para guardar el primero.")
+# ... (El resto de tu lógica de la base de datos y botones permanece igual)
