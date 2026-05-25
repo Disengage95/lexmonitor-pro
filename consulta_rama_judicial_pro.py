@@ -86,23 +86,46 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-# FUNCIÓN INDIVIDUAL DE CONSULTA (Bypass de Red Seguro)
+# SISTEMA MULTI-PUENTE ULTRA RESISTENTE
 def consultar_rama_judicial_individual(radicado):
     url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
-    url_proxy = f"https://api.allorigins.win/get?url={url_objetivo}"
+    
+    # Lista de proxies y métodos de extracción alternativos en cascada
+    proxies = [
+        {"name": "Puente Principal (AllOrigins)", "url": f"https://api.allorigins.win/get?url={url_objetivo}", "type": "json_contents"},
+        {"name": "Puente Secundario (Cors-Anywhere)", "url": f"https://corsproxy.io/?{url_objetivo}", "type": "direct_json"},
+    ]
+    
+    # Intento 0: Directo con headers limpios por si acaso la IP local responde
     try:
-        respuesta = requests.get(url_proxy, timeout=15)
-        if respuesta.status_code == 200:
-            contenedor_proxy = respuesta.json()
-            datos_originales = json.loads(contenedor_proxy["contents"])
-            if datos_originales.get("procesos") and len(datos_originales["procesos"]) > 0:
-                return datos_originales["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-            else:
-                return "No encontrado (Verifique que el radicado exista en la web judicial)"
-        else:
-            return f"Error en bypass de red (Status {respuesta.status_code})"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        res = requests.get(url_objetivo, headers=headers, timeout=6)
+        if res.status_code == 200:
+            datos = res.json()
+            if datos.get("procesos"):
+                return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
     except Exception:
-        return "Servidor judicial saturado, reintente en unos minutos"
+        pass
+
+    # Bucle en cascada a través de los puentes externos alternativos
+    for p in proxies:
+        try:
+            res = requests.get(p["url"], timeout=10)
+            if res.status_code == 200:
+                if p["type"] == "json_contents":
+                    contenedor = res.json()
+                    datos = json.loads(contenedor["contents"])
+                else:
+                    datos = res.json()
+                
+                if datos.get("procesos") and len(datos["procesos"]) > 0:
+                    return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+                elif "procesos" in datos:
+                    return "No encontrado en la base de datos judicial"
+        except Exception:
+            continue  # Salta al siguiente puente si este falla
+            
+    return "Error temporal de red judicial. Reintente en un momento."
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -113,7 +136,7 @@ if "logeado" not in st.session_state:
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
 if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: Utilizando bypass de conexión para IPs residenciales.")
+    st.warning("⚠️ Modo Local Activo: Utilizando bypass de conexión redundante.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -237,13 +260,12 @@ else:
                 
                 with col_acciones:
                     st.write("")  
-                    # BOTÓN DE CONSULTA INDIVIDUAL
+                    # BOTÓN DE CONSULTA INDIVIDUAL INDEPENDIENTE
                     if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
-                        with st.spinner("Consultando proceso..."):
+                        with st.spinner("Estableciendo conexión segura..."):
                             actuacion_real = consultar_rama_judicial_individual(rad)
                             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
-                            # Guardar en base de datos inmediatamente
                             conn = conectar_db()
                             cursor = conn.cursor()
                             cursor.execute('''
@@ -252,7 +274,6 @@ else:
                             conn.commit()
                             conn.close()
                             
-                            # Alerta por correo si cambió
                             if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "Error" not in actuacion_real:
                                 enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                                 
@@ -269,9 +290,9 @@ else:
                         
         st.markdown("---")
         
-        # BOTÓN GLOBAL (POR SI ACASO SE REQUIERE ACTUALIZAR TODO AL TIEMPO)
+        # BOTÓN GLOBAL CON MANEJO SEPARADO
         if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
-            with st.spinner("Actualizando todo el historial de procesos..."):
+            with st.spinner("Actualizando historial completo..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
