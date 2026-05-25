@@ -4,8 +4,8 @@ import hashlib
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
-import requests
 import json
+from requests_html import HTMLSession
 
 # CONFIGURACIÓN DE LA PÁGINA WEB
 st.set_page_config(page_title="LexMonitor - Control de Radicados", page_icon="⚖️", layout="wide")
@@ -86,46 +86,36 @@ def conectar_db():
 def encriptar_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-# SISTEMA MULTI-PUENTE ULTRA RESISTENTE
+# FUNCIÓN DE CONSULTA EMULADA ANTI-BLOQUEOS
 def consultar_rama_judicial_individual(radicado):
     url_objetivo = f"https://consultaprocesos.ramajudicial.gov.co/api/v1/Procesos/NumeroRadicacion/{radicado}"
     
-    # Lista de proxies y métodos de extracción alternativos en cascada
-    proxies = [
-        {"name": "Puente Principal (AllOrigins)", "url": f"https://api.allorigins.win/get?url={url_objetivo}", "type": "json_contents"},
-        {"name": "Puente Secundario (Cors-Anywhere)", "url": f"https://corsproxy.io/?{url_objetivo}", "type": "direct_json"},
-    ]
+    # Configuramos cabeceras idénticas a las de un navegador Chrome real en Windows 11
+    cabeceras = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "es-ES,es;q=0.9",
+        "Origin": "https://consultaprocesos.ramajudicial.gov.co",
+        "Referer": "https://consultaprocesos.ramajudicial.gov.co/"
+    }
     
-    # Intento 0: Directo con headers limpios por si acaso la IP local responde
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        res = requests.get(url_objetivo, headers=headers, timeout=6)
-        if res.status_code == 200:
-            datos = res.json()
-            if datos.get("procesos"):
+        # Iniciamos una sesión HTML avanzada
+        session = HTMLSession()
+        respuesta = session.get(url_objetivo, headers=cabeceras, timeout=12)
+        
+        if respuesta.status_code == 200:
+            datos = respuesta.json()
+            if datos.get("procesos") and len(datos["procesos"]) > 0:
                 return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
+            else:
+                return "No encontrado en la base de datos judicial"
+        elif respuesta.status_code == 404:
+            return "El número de radicado no existe en el sistema"
+        else:
+            return f"Acceso restringido por el servidor judicial (Código {respuesta.status_code})"
     except Exception:
-        pass
-
-    # Bucle en cascada a través de los puentes externos alternativos
-    for p in proxies:
-        try:
-            res = requests.get(p["url"], timeout=10)
-            if res.status_code == 200:
-                if p["type"] == "json_contents":
-                    contenedor = res.json()
-                    datos = json.loads(contenedor["contents"])
-                else:
-                    datos = res.json()
-                
-                if datos.get("procesos") and len(datos["procesos"]) > 0:
-                    return datos["procesos"][0].get("ultimaActuacion", "Sin actuaciones recientes")
-                elif "procesos" in datos:
-                    return "No encontrado en la base de datos judicial"
-        except Exception:
-            continue  # Salta al siguiente puente si este falla
-            
-    return "Error temporal de red judicial. Reintente en un momento."
+        return "El servidor judicial tardó demasiado en responder, intente de nuevo"
 
 # Inicializar estados de sesión esenciales
 if "logeado" not in st.session_state:
@@ -136,7 +126,7 @@ if "logeado" not in st.session_state:
 st.title("⚖️ LexMonitor Pro")
 st.subheader("Plataforma de Monitoreo Automatizado de Procesos - Rama Judicial")
 if not CORREO_CONFIGURADO:
-    st.warning("⚠️ Modo Local Activo: Utilizando bypass de conexión redundante.")
+    st.warning("⚠️ Modo Local Activo: Utilizando emulación de navegador de escritorio.")
 st.markdown("---")
 
 # MANEJO DE SESIONES (LOGIN / REGISTRO)
@@ -262,7 +252,7 @@ else:
                     st.write("")  
                     # BOTÓN DE CONSULTA INDIVIDUAL INDEPENDIENTE
                     if st.button("🔄 Actualizar este proceso", key=f"upd_{pid}", type="secondary", use_container_width=True):
-                        with st.spinner("Estableciendo conexión segura..."):
+                        with st.spinner("Simulando entorno de navegación seguro..."):
                             actuacion_real = consultar_rama_judicial_individual(rad)
                             fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
@@ -274,7 +264,7 @@ else:
                             conn.commit()
                             conn.close()
                             
-                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "Error" not in actuacion_real:
+                            if actuacion_real != actuacion and actuacion != "Pendiente de revisión" and "Error" not in actuacion_real and "Acceso" not in actuacion_real:
                                 enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                                 
                             st.rerun()
@@ -290,9 +280,9 @@ else:
                         
         st.markdown("---")
         
-        # BOTÓN GLOBAL CON MANEJO SEPARADO
+        # BOTÓN GLOBAL CON MANEJO EMULADO
         if st.button("🔄 Ejecutar Revisión de TODOS los Términos", type="secondary"):
-            with st.spinner("Actualizando historial completo..."):
+            with st.spinner("Actualizando historial completo mediante emulación segura..."):
                 conn = conectar_db()
                 cursor = conn.cursor()
                 
@@ -304,7 +294,7 @@ else:
                         UPDATE radicados SET ultima_actuacion = ?, fecha_ultima_revision = ? WHERE id = ?
                     ''', (actuacion_real, fecha_actual, pid))
                     
-                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Error" not in actuacion_real:
+                    if actuacion_real != actuacion_anterior and actuacion_anterior != "Pendiente de revisión" and "Error" not in actuacion_real and "Acceso" not in actuacion_real:
                         enviar_alerta_correo(st.session_state["usuario_correo"], rad, nombre, actuacion_real)
                 
                 conn.commit()
