@@ -4,40 +4,56 @@ import hashlib
 from datetime import datetime
 from playwright.sync_api import sync_playwright
 
-# --- CONFIGURACIÓN Y BASE DE DATOS IGUAL QUE ANTES ---
-# (Usa el mismo código de conexión de base de datos que ya tenías)
+st.set_page_config(page_title="LexMonitor Pro", layout="wide")
 
+# CONEXIÓN DB (Igual que antes)
+def conectar_db():
+    conn = sqlite3.connect("procesos.db")
+    cursor = conn.cursor()
+    cursor.execute('CREATE TABLE IF NOT EXISTS usuarios (id INTEGER PRIMARY KEY AUTOINCREMENT, correo TEXT UNIQUE, password_hash TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS radicados (id INTEGER PRIMARY KEY AUTOINCREMENT, usuario_id INTEGER, numero_radicado TEXT, nombre_caso TEXT, ultima_actuacion TEXT, fecha_ultima_revision TEXT, UNIQUE(usuario_id, numero_radicado))')
+    conn.commit()
+    return conn
+
+# FUNCIÓN DE CONSULTA CON PLAYWRIGHT (Navegación Real)
 def consultar_proceso_playwright(radicado):
     try:
         with sync_playwright() as p:
-            # Lanzamos navegador invisible (headless=True)
-            browser = p.chromium.launch(headless=True)
+            # Lanzamos navegador real
+            browser = p.chromium.launch(headless=True) # Cambia a False si quieres ver el navegador abriéndose
             page = browser.new_page()
             
-            # Navegamos a la web oficial
-            url = f"https://consultaprocesos.ramajudicial.gov.co/Procesos/NombreParte/1"
-            # NOTA: En la web, primero se debe buscar el radicado en la caja de búsqueda
-            page.goto("https://consultaprocesos.ramajudicial.gov.co/")
+            # Entramos al portal
+            page.goto("https://consultaprocesos.ramajudicial.gov.co/", wait_until="networkidle")
             
-            # Esperamos a que la caja de texto cargue
-            page.wait_for_selector("input[type='text']")
+            # Llenamos la búsqueda
             page.fill("input[type='text']", radicado)
             page.press("input[type='text']", "Enter")
             
-            # Esperamos a que aparezca el resultado (ajusta el selector según la web)
-            page.wait_for_timeout(5000) # Espera 5 segundos a que cargue
+            # Esperamos a que la tabla cargue (Vuetify usa v-data-table)
+            page.wait_for_selector("table", timeout=15000)
             
-            # Obtenemos el texto de la última actuación
-            actuacion = page.inner_text(".clase-de-la-actuacion") # Necesitas inspeccionar la web para el selector real
+            # Extraemos el texto de la última actuación (celda específica de la tabla)
+            # En base a tu inspección, el texto suele estar en la última celda <td> de la fila
+            resultado = page.inner_text("tbody tr:first-child td:nth-child(5)")
+            
             browser.close()
-            return actuacion
+            return str(resultado)
     except Exception as e:
-        return f"Error de automatización: {str(e)}"
+        return f"Error de navegación: {str(e)[:30]}"
 
-# --- LÓGICA DE STREAMLIT ---
-st.title("LexMonitor Pro - Navegación Real")
-rad = st.text_input("Radicado")
-if st.button("Consultar"):
-    with st.spinner("Navegando..."):
-        res = consultar_proceso_playwright(rad)
-        st.write(res)
+# --- INTERFAZ STREAMLIT ---
+st.title("⚖️ LexMonitor Pro - Motor de Navegación Real")
+
+if "logeado" not in st.session_state: st.session_state.update({"logeado": False, "usuario_id": 1})
+
+# (Aquí mantienes tu lógica de login y base de datos)
+
+st.header("📋 Mis Procesos")
+# ... (Tu código para mostrar la lista de procesos)
+
+if st.button("🔄 Ejecutar Actualización Real"):
+    with st.spinner("Simulando navegación humana en el portal..."):
+        # Ejemplo con el radicado que probamos
+        resultado = consultar_proceso_playwright("11001310300120140019200")
+        st.success(f"Resultado obtenido: {resultado}")
